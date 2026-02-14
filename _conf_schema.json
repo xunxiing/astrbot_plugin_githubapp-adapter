@@ -1,0 +1,43 @@
+{
+  "private_key_files": {
+    "description": "GitHub App Private Key (.pem)",
+    "type": "file",
+    "file_types": [
+      "pem"
+    ],
+    "hint": "Upload one .pem private key file for GitHub App credentials.",
+    "default": []
+  },
+  "default_github_events": {
+    "description": "Default GitHub Events",
+    "type": "list",
+    "hint": "Fallback event allowlist when platform config github_events is empty. Empty means all supported events.",
+    "default": []
+  },
+  "default_wake_event_types": {
+    "description": "Default Wake Event Types",
+    "type": "list",
+    "hint": "Fallback wake-event allowlist when platform config wake_event_types is empty.",
+    "default": [
+      "issues",
+      "pull_request"
+    ]
+  },
+  "enable_signature_validation": {
+    "description": "Enable signature validation",
+    "type": "bool",
+    "default": true
+  },
+  "delivery_cache_ttl_seconds": {
+    "description": "Delivery dedup cache ttl",
+    "type": "int",
+    "default": 900,
+    "hint": "Replay protection window in seconds."
+  },
+  "delivery_cache_max_entries": {
+    "description": "Delivery dedup cache max entries",
+    "type": "int",
+    "default": 10000,
+    "hint": "Upper bound for in-memory dedup cache."
+  }
+}
