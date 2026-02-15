@@ -102,7 +102,7 @@ def _inject_platform_metadata() -> None:
     "astrbot_plugin_githubapp-adopter",
     "OpenCode",
     "GitHub App webhook platform adapter for AstrBot",
-    "v0.1.0",
+    "v0.1.2",
     "https://github.com/example/astrbot_plugin_githubapp-adopter",
 )
 class GitHubAppAdopterPlugin(Star):

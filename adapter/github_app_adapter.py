@@ -85,6 +85,26 @@ def _make_message_chain_text(message_chain: MessageChain) -> str:
     return "".join(parts).strip()
 
 
+def _normalize_pem_text(text: Any) -> str:
+    if not isinstance(text, str):
+        return ""
+    value = text.strip()
+    if not value:
+        return ""
+    return value.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _is_valid_pem_private_key(pem: str) -> bool:
+    try:
+        serialization.load_pem_private_key(
+            pem.encode("utf-8"),
+            password=None,
+        )
+        return True
+    except Exception:
+        return False
+
+
 def _read_first_valid_private_key_text(paths: list[str]) -> str:
     for path in paths:
         if not path:
@@ -94,11 +114,9 @@ def _read_first_valid_private_key_text(paths: list[str]) -> str:
             continue
         try:
             pem = target_path.read_text(encoding="utf-8")
-            serialization.load_pem_private_key(
-                pem.encode("utf-8"),
-                password=None,
-            )
-            return pem
+            pem = _normalize_pem_text(pem)
+            if pem and _is_valid_pem_private_key(pem):
+                return pem
         except Exception:
             continue
     return ""
@@ -119,7 +137,6 @@ def _read_first_valid_private_key_text(paths: list[str]) -> str:
         "github_signature_validation": True,
         "github_delivery_cache_ttl_seconds": 900,
         "github_delivery_cache_max_entries": 10000,
-        "github_private_key_files": [],
         "unified_webhook_mode": True,
         "webhook_uuid": "",
     },
@@ -297,7 +314,6 @@ class GitHubAppAdapter(Platform):
 
     def _resolve_private_key_paths(self, plugin_cfg: dict[str, Any]) -> list[str]:
         candidates = _ensure_list(plugin_cfg.get("private_key_files"))
-        candidates.extend(_ensure_list(self.config.get("github_private_key_files")))
 
         plugin_data_root = Path(get_astrbot_plugin_data_path()) / PLUGIN_ROOT_DIR
         resolved: list[str] = []
