@@ -23,6 +23,18 @@
       "pull_request"
     ]
   },
+  "default_wake_on_mentions": {
+    "description": "Default wake on @mention",
+    "type": "bool",
+    "hint": "Used when platform config wake_on_mentions is not explicitly set.",
+    "default": true
+  },
+  "default_mention_target_logins": {
+    "description": "Default mention target logins",
+    "type": "list",
+    "hint": "Only wake on @mention when @login matches one of these values.",
+    "default": []
+  },
   "enable_signature_validation": {
     "description": "启用签名校验",
     "type": "bool",

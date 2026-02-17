@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from astrbot.api import logger
 from astrbot.api.event import filter
 from astrbot.api.star import Context, Star, register
@@ -19,6 +21,19 @@ SUPPORTED_GITHUB_EVENTS = [
     "watch",
     "fork",
 ]
+RUNTIME_PLUGIN_CONFIG: dict[str, Any] = {}
+
+
+def set_runtime_plugin_config(config: dict | None) -> None:
+    global RUNTIME_PLUGIN_CONFIG
+    if isinstance(config, dict):
+        RUNTIME_PLUGIN_CONFIG = dict(config)
+    else:
+        RUNTIME_PLUGIN_CONFIG = {}
+
+
+def get_runtime_plugin_config() -> dict[str, Any]:
+    return dict(RUNTIME_PLUGIN_CONFIG)
 
 
 def _inject_platform_metadata() -> None:
@@ -71,6 +86,22 @@ def _inject_platform_metadata() -> None:
         },
     )
     items.setdefault(
+        "wake_on_mentions",
+        {
+            "description": "Wake on @mention",
+            "type": "bool",
+            "hint": "Wake LLM when message body contains a GitHub @mention.",
+        },
+    )
+    items.setdefault(
+        "mention_target_logins",
+        {
+            "description": "Mention target logins",
+            "type": "list",
+            "hint": "Only wake by mention when @login matches one of these values.",
+        },
+    )
+    items.setdefault(
         "github_signature_validation",
         {
             "description": "启用签名校验",
@@ -109,9 +140,11 @@ class GitHubAppAdopterPlugin(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
         self.config = config
+        set_runtime_plugin_config(config)
         _inject_platform_metadata()
         from .adapter.github_app_adapter import GitHubAppAdapter  # noqa: F401
 
     @filter.on_astrbot_loaded()
     async def on_astrbot_loaded(self):
+        set_runtime_plugin_config(self.config)
         _inject_platform_metadata()

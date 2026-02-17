@@ -79,5 +79,5 @@
 
 ## 说明
 
-- 当前版本聚焦于“接收与路由”链路；`send_by_session` 不会回写 GitHub。
+- `send_by_session` 支持向 Issue / PR 线程回写评论（通过 GitHub App Installation Token 调用 API）。
 - 日志不会输出私钥、secret 或签名原文。
