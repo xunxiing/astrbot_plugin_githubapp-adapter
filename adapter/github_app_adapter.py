@@ -44,7 +44,7 @@ from .security import (
 )
 
 PLUGIN_ROOT_DIR = "astrbot_plugin_githubapp-adopter"
-ADAPTER_BUILD_MARK = "2026-02-17.16"
+ADAPTER_BUILD_MARK = "2026-02-18.01"
 MENTION_PATTERN = re.compile(r"(?<![A-Za-z0-9_])@[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})")
 HTML_IMAGE_SRC_PATTERN = re.compile(
     r"""<img\b[^>]*\bsrc=["']([^"']+)["'][^>]*>""",
@@ -481,15 +481,10 @@ def _replace_event_message_text(
     local_paths = list(dict.fromkeys((image_local_paths or [])))
     fallback_urls = list(dict.fromkeys((image_fallback_urls or [])))
     components: list[Any] = []
+    if not value and local_paths:
+        value = "[包含图片附件]"
     if value:
         components.append(Plain(text=value))
-    for file_path in local_paths:
-        if not file_path:
-            continue
-        try:
-            components.append(Image.fromFileSystem(file_path))
-        except Exception:
-            continue
     if fallback_urls and not local_paths:
         fallback_text = "\n".join(f"[Image URL] {u}" for u in fallback_urls)
         if fallback_text:
@@ -529,6 +524,20 @@ def _parse_session_route(
         thread_number=thread_number,
         installation_id=installation_id,
     )
+
+
+def _normalize_repo_full_name(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    repo = value.strip().strip("/")
+    if not repo or "/" not in repo:
+        return ""
+    owner, name = repo.split("/", 1)
+    owner = owner.strip()
+    name = name.strip()
+    if not owner or not name:
+        return ""
+    return f"{owner}/{name}"
 
 
 def _get_runtime_plugin_config_snapshot() -> dict[str, Any]:
@@ -1325,6 +1334,67 @@ class GitHubAppAdapter(Platform):
             return slug.strip().lower()
         return ""
 
+    async def issue_installation_token_for_skill(
+        self,
+        *,
+        repo: str = "",
+        installation_id: int | None = None,
+        permissions: Mapping[str, str] | None = None,
+        repositories: list[str] | None = None,
+    ) -> tuple[bool, dict[str, Any]]:
+        self._refresh_runtime_config()
+        if not self.github_app_id:
+            return False, {"error": "github_app_id is empty"}
+        if not self.private_key_text:
+            return False, {"error": "private key is empty or invalid"}
+
+        resolved_repo = _normalize_repo_full_name(repo)
+        resolved_installation_id = (
+            int(installation_id) if isinstance(installation_id, int) else None
+        )
+        if resolved_installation_id is None:
+            if not resolved_repo:
+                return False, {
+                    "error": "repo is required when installation_id is not provided"
+                }
+            resolved_installation_id = await self._resolve_installation_id(resolved_repo)
+            if resolved_installation_id is None:
+                return (
+                    False,
+                    {
+                        "error": f"installation id not found for repo={resolved_repo}",
+                    },
+                )
+
+        token_data = await self._create_installation_access_token(
+            resolved_installation_id,
+            permissions=permissions,
+            repositories=repositories,
+            use_cache=False,
+        )
+        token = token_data.get("token")
+        if not isinstance(token, str) or not token:
+            detail = str(token_data.get("error", "failed to get installation access token"))
+            return False, {"error": detail}
+
+        expires_epoch = float(token_data.get("expires_at_epoch", 0.0) or 0.0)
+        expires_in = int(expires_epoch - time.time()) if expires_epoch > 0 else 0
+        if expires_in < 0:
+            expires_in = 0
+
+        return (
+            True,
+            {
+                "token": token,
+                "expires_at": str(token_data.get("expires_at", "")),
+                "expires_in_seconds": expires_in,
+                "installation_id": resolved_installation_id,
+                "repo": resolved_repo,
+                "repository_selection": token_data.get("repository_selection"),
+                "permissions": token_data.get("permissions"),
+            },
+        )
+
     async def _send_text_to_github(
         self,
         session_id: str,
@@ -1390,14 +1460,53 @@ class GitHubAppAdapter(Platform):
         return int(installation_id) if isinstance(installation_id, int) else None
 
     async def _get_installation_access_token(self, installation_id: int) -> str:
+        token_data = await self._create_installation_access_token(
+            installation_id,
+            permissions=None,
+            repositories=None,
+            use_cache=True,
+        )
+        token = token_data.get("token")
+        if isinstance(token, str):
+            return token
+        return ""
+
+    async def _create_installation_access_token(
+        self,
+        installation_id: int,
+        *,
+        permissions: Mapping[str, str] | None = None,
+        repositories: list[str] | None = None,
+        use_cache: bool = True,
+    ) -> dict[str, Any]:
         now = time.time()
-        cached = self._installation_token_cache.get(installation_id)
-        if cached and cached.expires_at - 60 > now:
-            return cached.token
+        permission_map = (
+            {str(k): str(v) for k, v in permissions.items()}
+            if isinstance(permissions, Mapping)
+            else {}
+        )
+        scoped_repositories = list(
+            dict.fromkeys(
+                str(name).strip()
+                for name in (repositories or [])
+                if isinstance(name, str) and str(name).strip()
+            )
+        )
+        use_default_scope = not permission_map and not scoped_repositories
+        if use_cache and use_default_scope:
+            cached = self._installation_token_cache.get(installation_id)
+            if cached and cached.expires_at - 60 > now:
+                return {
+                    "token": cached.token,
+                    "expires_at": "",
+                    "expires_at_epoch": cached.expires_at,
+                    "repository_selection": "all",
+                    "permissions": {},
+                }
 
         app_jwt = self._build_app_jwt()
         if not app_jwt:
-            return ""
+            return {"error": "app jwt build failed"}
         url = (
             f"{self.github_api_base_url}/app/installations/"
             f"{installation_id}/access_tokens"
@@ -1407,25 +1516,41 @@ class GitHubAppAdapter(Platform):
             "Authorization": f"Bearer {app_jwt}",
             "X-GitHub-Api-Version": "2022-11-28",
         }
-        status, data = await self._request_json("POST", url, headers=headers, body={})
+        body: dict[str, Any] = {}
+        if permission_map:
+            body["permissions"] = permission_map
+        if scoped_repositories:
+            body["repositories"] = scoped_repositories
+        status, data = await self._request_json("POST", url, headers=headers, body=body)
         if status != 201 or not isinstance(data, Mapping):
             detail = _stringify_github_error(data)
             logger.warning(
-                f"[GitHubApp] get installation token failed: installation={installation_id}, status={status}, detail={detail}"
+                "[GitHubApp] get installation token failed: "
+                f"installation={installation_id}, status={status}, detail={detail}"
             )
-            return ""
+            return {"error": f"status={status}, detail={detail}"}
 
         token = data.get("token")
         if not isinstance(token, str) or not token:
-            return ""
-        expires_at = self._parse_github_datetime(data.get("expires_at"))
-        if expires_at <= now:
-            expires_at = now + 3000
-        self._installation_token_cache[installation_id] = InstallationTokenCacheEntry(
-            token=token,
-            expires_at=expires_at,
-        )
-        return token
+            return {"error": "token missing"}
+        expires_at_text = data.get("expires_at")
+        expires_at_epoch = self._parse_github_datetime(expires_at_text)
+        if expires_at_epoch <= now:
+            expires_at_epoch = now + 3000
+        if use_cache and use_default_scope:
+            self._installation_token_cache[installation_id] = InstallationTokenCacheEntry(
+                token=token,
+                expires_at=expires_at_epoch,
+            )
+        return {
+            "token": token,
+            "expires_at": str(expires_at_text or ""),
+            "expires_at_epoch": expires_at_epoch,
+            "repository_selection": data.get("repository_selection"),
+            "permissions": dict(data.get("permissions", {}))
+            if isinstance(data.get("permissions"), Mapping)
+            else {},
+        }
 
     async def _post_issue_comment(
         self,

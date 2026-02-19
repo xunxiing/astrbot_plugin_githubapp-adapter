@@ -1,83 +1,85 @@
 # astrbot_plugin_githubapp-adopter
 
-一个用于 AstrBot 的 GitHub App Webhook 平台适配插件。
+一个为 AstrBot 提供 `github_app` 平台适配能力的插件，用于接入 GitHub App Webhook 事件。
 
-本插件会注册 `github_app` 平台适配器，用于接收 GitHub App 的 Webhook 事件并注入 AstrBot 事件总线。
+插件可将 GitHub 事件映射为 AstrBot 会话，并支持将机器人回复回写到 Issue/PR 线程（基于 GitHub App Installation Token）。
 
-## 功能
+## 功能概览
 
-- 平台适配器：`github_app`
-- Webhook 接入：使用 AstrBot 统一 Webhook 模式（`/api/platform/webhook/{webhook_uuid}`）
-- 事件订阅：按事件类型筛选接收范围（allowlist）
-- 私钥配置：插件配置页支持上传 `.pem` 私钥文件
-- 安全增强：
-  - `X-Hub-Signature-256` HMAC 校验（可开关）
-  - Delivery 去重（防重放）
-- 动态 Session 路由（符合 GitHub 线性 Thread 交互）：
-  - Issue / PR / Discussion -> 绑定到具体编号线程
-  - Push / Star / Release 等全局事件 -> 绑定到仓库全局会话
-
-## Session 路由策略
-
-- `issues` / `issue_comment`  
-  `github:{owner}/{repo}:issue:{issue_number}`
-- `pull_request` / `pull_request_review` / `pull_request_review_comment`  
-  `github:{owner}/{repo}:pr:{pull_number}`
-- `discussion` / `discussion_comment`  
-  `github:{owner}/{repo}:discussion:{discussion_number}`
-- 其他事件（如 `push` / `watch` / `fork` / `release`）  
-  `github:{owner}/{repo}:global`
-
-## 配置说明
-
-### 1) 插件配置（私钥在这里上传）
-
-在插件配置页设置：
-
-- `private_key_files`：上传 `.pem` 私钥文件（支持多个，实际取第一个可用文件）
-- `default_github_events`：默认订阅事件列表（空 = 全部支持事件）
-- `default_wake_event_types`：默认唤醒 LLM 的事件类型列表
-- `enable_signature_validation`：是否启用签名校验
-- `delivery_cache_ttl_seconds`：去重 TTL
-- `delivery_cache_max_entries`：去重缓存上限
-
-### 2) 平台配置（新增一个 `github_app` 平台）
-
-在 AstrBot 平台配置中新增并启用一条：
-
-- `type`: `github_app`
-- `id`: 自定义（建议 `github_app`）
-- `github_app_id`: GitHub App ID
-- `github_webhook_secret`: GitHub Webhook Secret
-- `github_events`: 订阅事件列表（空 = 继承插件默认；若插件默认也为空则为全部支持事件）
-- `wake_event_types`: 唤醒 LLM 的事件列表
-- `unified_webhook_mode`: `true`
-
-## Webhook 地址
-
-本插件使用 AstrBot 统一 Webhook 路由：
-
-`http://<astrbot-host>:6185/api/platform/webhook/{webhook_uuid}`
-
-其中 `{webhook_uuid}` 会在创建平台配置时自动生成。
-
-如果你需要对外固定为 `/github`，建议在反向代理层将 `/github` 转发到上面的统一 Webhook 地址。
+- `github_app` 平台适配器
+- 统一 webhook 路由（`/api/platform/webhook/{webhook_uuid}`）
+- 事件类型白名单过滤
+- webhook 签名校验（`X-Hub-Signature-256`）
+- Delivery 去重缓存（防重放）
+- 按仓库/线程动态会话路由
+- 回写评论到 GitHub Issue/PR
+- 插件加载后自动创建并激活 GitHub skill
+- 提供临时令牌工具：`github_app_issue_token`
 
 ## 已支持事件
 
-- issues
-- issue_comment
-- pull_request
-- pull_request_review
-- pull_request_review_comment
-- push
-- release
-- discussion
-- discussion_comment
-- watch
-- fork
+- `issues`
+- `issue_comment`
+- `pull_request`
+- `pull_request_review`
+- `pull_request_review_comment`
+- `push`
+- `release`
+- `discussion`
+- `discussion_comment`
+- `watch`
+- `fork`
 
-## 说明
+## 会话路由
 
-- `send_by_session` 支持向 Issue / PR 线程回写评论（通过 GitHub App Installation Token 调用 API）。
-- 日志不会输出私钥、secret 或签名原文。
+- `issues` / `issue_comment` -> `github:{owner}/{repo}:issue:{issue_number}`
+- `pull_request` / `pull_request_review` / `pull_request_review_comment` -> `github:{owner}/{repo}:pr:{pull_number}`
+- `discussion` / `discussion_comment` -> `github:{owner}/{repo}:discussion:{discussion_number}`
+- 其他事件 -> `github:{owner}/{repo}:global`
+
+## 配置说明
+
+### 插件配置（`_conf_schema.json`）
+
+- `private_key_files`：上传 GitHub App `.pem` 私钥
+- `default_github_events`：默认事件订阅列表
+- `default_wake_event_types`：默认事件唤醒列表
+- `enable_signature_validation`：是否开启 webhook 签名校验
+- `delivery_cache_ttl_seconds`：去重缓存 TTL
+- `delivery_cache_max_entries`：去重缓存上限
+- `auto_create_github_skill`：插件加载时自动创建/更新 skill
+- `github_skill_name`：`data/skills` 下 skill 目录名
+- `overwrite_github_skill`：是否覆盖插件生成的 `SKILL.md`
+
+### 平台配置（新增 `github_app` 平台）
+
+- `type`: `github_app`
+- `id`: 自定义平台 ID（例如 `github_app`）
+- `github_app_id`: GitHub App ID
+- `github_webhook_secret`: webhook 密钥
+- `github_api_base_url`: 默认 `https://api.github.com`
+- `github_events`: 订阅事件（空则使用插件默认）
+- `wake_event_types`: 按事件类型触发唤醒
+- `wake_on_mentions`: 被 @ 时唤醒
+- `mention_target_logins`: 提及目标登录名白名单
+- `ignore_bot_sender_events`: 忽略 bot 发送者事件
+- `github_signature_validation`: 签名校验开关
+- `github_delivery_cache_ttl_seconds`: 去重 TTL 覆盖值
+- `github_delivery_cache_max_entries`: 去重上限覆盖值
+- `unified_webhook_mode`: `true`
+- `webhook_uuid`: 在平台面板中自动生成
+
+## 临时令牌工作流
+
+1. Agent 调用 `github_app_issue_token`
+2. 插件返回短期 Installation Token
+3. Agent 将令牌写入环境变量（`GH_TOKEN`）并执行 `gh` / `git` / `curl`
+4. 任务完成后立即清理 `GH_TOKEN`
+
+该方式避免向模型暴露永久凭据。
+
+## Webhook 地址
+
+`http://<astrbot-host>:6185/api/platform/webhook/{webhook_uuid}`
+
+如果你希望对外固定为 `/github`，可在反向代理层将该路径转发到上面的统一 webhook 地址。

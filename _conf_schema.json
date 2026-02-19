@@ -1,48 +1,48 @@
 {
   "private_key_files": {
-    "description": "GitHub App 私钥（.pem）",
+    "description": "GitHub App 私钥文件（.pem）",
     "type": "file",
     "file_types": [
       "pem"
     ],
-    "hint": "上传 GitHub App 的私钥文件（PEM 格式）。支持多个文件，实际使用时会取第一个可用文件。",
+    "hint": "上传一个或多个 GitHub App 私钥文件，实际会使用第一个有效 PEM。",
     "default": []
   },
   "default_github_events": {
-    "description": "默认接收的 GitHub 事件",
+    "description": "默认订阅的 GitHub 事件",
     "type": "list",
-    "hint": "当平台配置中的 github_events 为空时，使用这里作为兜底订阅列表。留空表示接收全部已支持事件。",
+    "hint": "当平台级 github_events 为空时使用此配置；留空表示全部已支持事件。",
     "default": []
   },
   "default_wake_event_types": {
     "description": "默认唤醒事件类型",
     "type": "list",
-    "hint": "当平台配置中的 wake_event_types 为空时，使用这里作为兜底唤醒事件列表。",
+    "hint": "当平台级 wake_event_types 为空时使用此配置。",
     "default": [
       "issues",
       "pull_request"
     ]
   },
   "default_wake_on_mentions": {
-    "description": "Default wake on @mention",
+    "description": "默认 @ 提及时唤醒",
     "type": "bool",
-    "hint": "Used when platform config wake_on_mentions is not explicitly set.",
+    "hint": "当平台级 wake_on_mentions 未显式设置时使用此配置。",
     "default": true
   },
   "default_mention_target_logins": {
-    "description": "Default mention target logins",
+    "description": "默认提及目标登录名",
     "type": "list",
-    "hint": "Only wake on @mention when @login matches one of these values.",
+    "hint": "仅当 @login 命中这些值时，按提及触发唤醒。",
     "default": []
   },
   "default_ignore_bot_sender_events": {
-    "description": "Default ignore bot sender events",
+    "description": "默认忽略 Bot 发送者事件",
     "type": "bool",
-    "hint": "Ignore webhook events where sender.type is Bot.",
+    "hint": "忽略 sender.type 为 Bot 的 webhook 事件。",
     "default": true
   },
   "enable_signature_validation": {
-    "description": "启用签名校验",
+    "description": "启用 webhook 签名校验",
     "type": "bool",
     "default": true
   },
@@ -50,12 +50,30 @@
     "description": "Delivery 去重缓存 TTL（秒）",
     "type": "int",
     "default": 900,
-    "hint": "重放保护窗口（秒）。"
+    "hint": "用于防重放的去重缓存存活时间（秒）。"
   },
   "delivery_cache_max_entries": {
     "description": "Delivery 去重缓存最大条目数",
     "type": "int",
     "default": 10000,
     "hint": "内存去重缓存的上限。"
+  },
+  "auto_create_github_skill": {
+    "description": "插件加载时自动创建 GitHub skill",
+    "type": "bool",
+    "default": true,
+    "hint": "自动在 data/skills 下创建或更新 skill，并激活。"
+  },
+  "github_skill_name": {
+    "description": "GitHub skill 目录名",
+    "type": "string",
+    "default": "github_app_ops",
+    "hint": "data/skills 下的目录名，建议仅使用字母、数字、点、下划线和短横线。"
+  },
+  "overwrite_github_skill": {
+    "description": "覆盖插件生成的 GitHub skill",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后插件加载时会覆盖 SKILL.md，确保说明与代码同步。"
   }
 }
