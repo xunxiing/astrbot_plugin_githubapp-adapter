@@ -1,85 +1,64 @@
 # astrbot_plugin_githubapp-adopter
 
-一个为 AstrBot 提供 `github_app` 平台适配能力的插件，用于接入 GitHub App Webhook 事件。
+为 AstrBot 提供 `github_app` 平台适配能力，接收 GitHub Webhook，并支持两类自动化能力：
 
-插件可将 GitHub 事件映射为 AstrBot 会话，并支持将机器人回复回写到 Issue/PR 线程（基于 GitHub App Installation Token）。
+- 旧版 token 工具（legacy）：`github_app_issue_token`
+- 新版受控写入工具（推荐）：`github_app_create_license_pr`
 
-## 功能概览
+## 核心结论
 
-- `github_app` 平台适配器
-- 统一 webhook 路由（`/api/platform/webhook/{webhook_uuid}`）
-- 事件类型白名单过滤
-- webhook 签名校验（`X-Hub-Signature-256`）
+- 旧 token 系统保留可用。
+- “创建分支 + 提 PR”场景建议走新受控工具，不把 token 暴露给模型。
+
+## 功能
+
+- `github_app` 平台适配与会话路由
+- Webhook 签名校验（`X-Hub-Signature-256`）
 - Delivery 去重缓存（防重放）
-- 按仓库/线程动态会话路由
-- 回写评论到 GitHub Issue/PR
-- 插件加载后自动创建并激活 GitHub skill
-- 提供临时令牌工具：`github_app_issue_token`
+- 将机器人回复回写到 GitHub Issue/PR 线程
+- 自动创建并激活 GitHub skill（默认 `github_app_ops`）
 
-## 已支持事件
+## 工具说明
 
-- `issues`
-- `issue_comment`
-- `pull_request`
-- `pull_request_review`
-- `pull_request_review_comment`
-- `push`
-- `release`
-- `discussion`
-- `discussion_comment`
-- `watch`
-- `fork`
+### `github_app_create_license_pr`（推荐）
 
-## 会话路由
+插件内部完成：
 
-- `issues` / `issue_comment` -> `github:{owner}/{repo}:issue:{issue_number}`
-- `pull_request` / `pull_request_review` / `pull_request_review_comment` -> `github:{owner}/{repo}:pr:{pull_number}`
-- `discussion` / `discussion_comment` -> `github:{owner}/{repo}:discussion:{discussion_number}`
-- 其他事件 -> `github:{owner}/{repo}:global`
+1. 获取安装令牌（仅插件内使用）
+2. 创建分支
+3. 写入 `LICENSE`（MIT）
+4. 创建 PR（若已存在同分支 PR，则返回已有 PR）
 
-## 配置说明
+特点：
 
-### 插件配置（`_conf_schema.json`）
+- 模型拿不到真实 token
+- 分支/PR动作集中在单个受控入口
 
-- `private_key_files`：上传 GitHub App `.pem` 私钥
-- `default_github_events`：默认事件订阅列表
-- `default_wake_event_types`：默认事件唤醒列表
-- `enable_signature_validation`：是否开启 webhook 签名校验
-- `delivery_cache_ttl_seconds`：去重缓存 TTL
-- `delivery_cache_max_entries`：去重缓存上限
-- `auto_create_github_skill`：插件加载时自动创建/更新 skill
-- `github_skill_name`：`data/skills` 下 skill 目录名
-- `overwrite_github_skill`：是否覆盖插件生成的 `SKILL.md`
+### `github_app_issue_token`（保留）
 
-### 平台配置（新增 `github_app` 平台）
+保留旧流程，适用于你需要自定义脚本/命令的场景。  
+可通过配置 `enable_issue_token_tool` 控制启用。
 
-- `type`: `github_app`
-- `id`: 自定义平台 ID（例如 `github_app`）
-- `github_app_id`: GitHub App ID
-- `github_webhook_secret`: webhook 密钥
-- `github_api_base_url`: 默认 `https://api.github.com`
-- `github_events`: 订阅事件（空则使用插件默认）
-- `wake_event_types`: 按事件类型触发唤醒
-- `wake_on_mentions`: 被 @ 时唤醒
-- `mention_target_logins`: 提及目标登录名白名单
-- `ignore_bot_sender_events`: 忽略 bot 发送者事件
-- `github_signature_validation`: 签名校验开关
-- `github_delivery_cache_ttl_seconds`: 去重 TTL 覆盖值
-- `github_delivery_cache_max_entries`: 去重上限覆盖值
-- `unified_webhook_mode`: `true`
-- `webhook_uuid`: 在平台面板中自动生成
+## 安全与开关
 
-## 临时令牌工作流
+- `enable_direct_repo_write_tool`: 是否启用受控写入工具（新工具开关）
+- `enable_issue_token_tool`: 是否启用旧 token 工具（legacy 开关）
+- `enable_privileged_write_mode`: 旧 token 流程的权限策略开关（不再影响受控 PR 工具）
+- `privileged_mode_require_whitelist`: 高权限模式下是否要求 shell/python 命中白名单
+- `enforce_tool_write_guard`: shell/python 风险命令防护
 
-1. Agent 调用 `github_app_issue_token`
-2. 插件返回短期 Installation Token
-3. Agent 将令牌写入环境变量（`GH_TOKEN`）并执行 `gh` / `git` / `curl`
-4. 任务完成后立即清理 `GH_TOKEN`
+## 推荐配置（新旧并存）
 
-该方式避免向模型暴露永久凭据。
+```json
+{
+  "enable_direct_repo_write_tool": true,
+  "enable_issue_token_tool": true,
+  "enable_privileged_write_mode": false,
+  "privileged_mode_require_whitelist": true,
+  "enforce_tool_write_guard": true
+}
+```
 
 ## Webhook 地址
 
 `http://<astrbot-host>:6185/api/platform/webhook/{webhook_uuid}`
-
-如果你希望对外固定为 `/github`，可在反向代理层将该路径转发到上面的统一 webhook 地址。
