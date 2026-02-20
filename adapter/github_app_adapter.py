@@ -43,7 +43,8 @@ from .security import (
     verify_github_signature,
 )
 
-PLUGIN_ROOT_DIR = "astrbot_plugin_githubapp-adopter"
+PLUGIN_ROOT_DIR = "astrbot_plugin_githubapp-adapter"
+LEGACY_PLUGIN_ROOT_DIR = "astrbot_plugin_githubapp-adopter"
 ADAPTER_BUILD_MARK = "2026-02-18.01"
 MENTION_PATTERN = re.compile(r"(?<![A-Za-z0-9_])@[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})")
 HTML_IMAGE_SRC_PATTERN = re.compile(
@@ -76,9 +77,18 @@ class InstallationTokenCacheEntry:
 
 
 class PluginConfigStore:
-    def __init__(self, plugin_root_dir: str) -> None:
-        config_name = f"{plugin_root_dir}_config.json"
-        self._paths = self._build_candidate_paths(config_name)
+    def __init__(
+        self,
+        plugin_root_dir: str,
+        legacy_root_dirs: list[str] | None = None,
+    ) -> None:
+        root_dirs = [plugin_root_dir]
+        for legacy in (legacy_root_dirs or []):
+            legacy_name = str(legacy).strip()
+            if legacy_name and legacy_name not in root_dirs:
+                root_dirs.append(legacy_name)
+        config_names = [f"{name}_config.json" for name in root_dirs]
+        self._paths = self._build_candidate_paths(config_names)
         self._cached_data: dict[str, Any] = {}
         self._cached_signature: tuple[str, int, int] | None = None
         self.last_selected_path = ""
@@ -87,7 +97,7 @@ class PluginConfigStore:
         self.last_candidate_paths: list[str] = [str(p) for p in self._paths]
 
     @staticmethod
-    def _build_candidate_paths(config_name: str) -> list[Path]:
+    def _build_candidate_paths(config_names: list[str]) -> list[Path]:
         roots: list[Path] = []
         roots.append(Path(get_astrbot_config_path()))
 
@@ -100,7 +110,10 @@ class PluginConfigStore:
                 roots.append(ancestor / "config")
             roots.append(ancestor / "data" / "config")
 
-        candidates = [(root / config_name).resolve(strict=False) for root in roots]
+        candidates: list[Path] = []
+        for root in roots:
+            for config_name in config_names:
+                candidates.append((root / config_name).resolve(strict=False))
         deduped = list(dict.fromkeys(candidates))
         return deduped
 
@@ -639,7 +652,10 @@ class GitHubAppAdapter(Platform):
             support_streaming_message=False,
         )
 
-        self._plugin_config_store = PluginConfigStore(PLUGIN_ROOT_DIR)
+        self._plugin_config_store = PluginConfigStore(
+            PLUGIN_ROOT_DIR,
+            legacy_root_dirs=[LEGACY_PLUGIN_ROOT_DIR],
+        )
         self._delivery_cache = DeliveryDeduplicator()
 
         self.github_app_id = ""

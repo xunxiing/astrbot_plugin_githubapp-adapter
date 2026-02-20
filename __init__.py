@@ -1,3 +1,3 @@
-from .main import GitHubAppAdopterPlugin
+from .main import GitHubAppAdapterPlugin, GitHubAppAdopterPlugin
 
-__all__ = ["GitHubAppAdopterPlugin"]
+__all__ = ["GitHubAppAdapterPlugin", "GitHubAppAdopterPlugin"]

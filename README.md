@@ -1,42 +1,37 @@
-# astrbot_plugin_githubapp-adqpter
+# astrbot_plugin_githubapp-adapter
 
-GitHub App adapter plugin for AstrBot.
+用于 AstrBot 的 GitHub App 适配插件。
 
-## Tools
+## 工具
 
 - `github_create_license_pr`
-  - Controlled remote write flow: create/reuse branch, write `LICENSE` (MIT), open PR.
-  - Token is handled inside plugin only and never exposed to LLM.
+  - 受控写入：创建或复用分支、写入 `LICENSE`（MIT）、创建 PR。
+  - 令牌仅在插件内部使用，不向 LLM 暴露。
 - `github_repo_ls`
-  - List one directory level with pagination (read-only).
+  - 只读列目录：按一层目录返回文件与文件夹，支持分页。
 - `github_repo_read`
-  - Read file content by line range (chunked, read-only).
+  - 只读读文件：按行分段读取文件内容，适合大文件。
 - `github_repo_search`
-  - Search keyword hits in repository code (read-only).
-  - Uses GitHub App installation token inside plugin; token is never exposed to LLM.
+  - 只读搜索：在仓库内按关键字检索代码路径与片段。
 
-## Removed
+## 安全模型
 
-- Legacy token-issuing tool has been removed and is no longer exposed to LLM.
+- GitHub 工具仅在 `github_app` 会话中暴露。
+- LLM 可在沙盒中使用本地 shell/git。
+- GitHub 会话可自动准备沙盒工作区，并在缺少仓库时自动克隆。
+- 远程写入（分支/提交/PR）仅通过受控工具执行。
+- GitHub 会话会向模型注入仓库、线程标题、线程编号和工作区路径上下文。
+- 插件不会向模型返回真实 GitHub 令牌。
+- 可选的令牌字面量防护仅拦截明文 `ghs_...`。
 
-## Security Model
+## 关键配置
 
-- GitHub tools are exposed only for `github_app` session requests.
-- LLM can use local shell/git in sandbox.
-- For GitHub sessions, plugin can auto-prepare session workspace and auto-clone target repo in sandbox.
-- Remote write (branch/push/PR) is handled by controlled plugin tools only.
-- Repo / thread title / session workspace path are injected into LLM system prompt for GitHub sessions.
-- Plugin does not return real GitHub tokens to model.
-- Optional literal token guard only blocks plain `ghs_...` tokens in shell/python tool args.
-
-## Key Config
-
-- `enable_direct_repo_write_tool=true`: allow `github_create_license_pr`.
-- `enable_auto_sandbox_workspace_prepare=true` (default): auto-bootstrap sandbox workspace for shell calls.
-- `sandbox_workspace_root=/tmp/github-workspaces`: workspace root in sandbox.
-- `sandbox_workspace_clone_depth=1`: shallow clone depth for auto bootstrap.
-- `enforce_tool_write_guard=false` (default): do not restrict local shell/git behavior.
-- `guard_block_token_literal=true`: if guard is enabled, block plain token literals.
+- `enable_direct_repo_write_tool=true`：启用 `github_create_license_pr`。
+- `enable_auto_sandbox_workspace_prepare=true`（默认）：自动准备沙盒工作区。
+- `sandbox_workspace_root=/tmp/github-workspaces`：沙盒工作区根目录。
+- `sandbox_workspace_clone_depth=1`：自动克隆深度。
+- `enforce_tool_write_guard=false`（默认）：是否启用令牌字面量防护总开关。
+- `guard_block_token_literal=true`：启用后拦截明文 `ghs_...`。
 
 ## Webhook
 

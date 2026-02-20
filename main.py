@@ -171,23 +171,23 @@ def _build_workspace_path(
 
 def _build_github_skill_content(skill_name: str) -> str:
     return f"""---
-description: GitHub App operations skill. Use safe tools only.
+description: GitHub 应用操作技能。仅使用受控工具。
 ---
 
 # {skill_name}
 
 ## Priority
 
-- For add-license tasks, call `{GITHUB_CREATE_LICENSE_PR_TOOL_NAME}`.
-- For repository navigation, call `{GITHUB_REPO_LS_TOOL_NAME}` first.
-- For file content, call `{GITHUB_REPO_READ_TOOL_NAME}`.
-- For keyword lookup, call `{GITHUB_REPO_SEARCH_TOOL_NAME}`.
+- 需要添加许可证并创建合并请求时，调用 `{GITHUB_CREATE_LICENSE_PR_TOOL_NAME}`。
+- 浏览仓库结构时，先调用 `{GITHUB_REPO_LS_TOOL_NAME}`。
+- 阅读文件内容时，调用 `{GITHUB_REPO_READ_TOOL_NAME}`。
+- 关键字检索代码时，调用 `{GITHUB_REPO_SEARCH_TOOL_NAME}`。
 
 ## Typical flow
 
-1. Resolve repo as `owner/repo`.
-2. If task is add-license-and-open-pr, use license PR tool.
-3. For code questions, list directory first, then read files in chunks.
+1. 先解析仓库标识 `owner/repo`。
+2. 如需添加许可证并创建合并请求，使用许可证工具。
+3. 处理代码问题时，先列目录，再分段读取文件。
 """
 
 def _ensure_github_skill(config: Mapping[str, Any] | None) -> str:
@@ -236,22 +236,22 @@ def _inject_platform_metadata() -> None:
     items = platform_meta["items"]
 
     items["github_app_id"] = {
-        "description": "GitHub App ID",
+        "description": "平台应用编号",
         "type": "string",
-        "hint": "可在 GitHub App 设置页面中找到。",
+        "hint": "可在平台应用设置页面中找到。",
     }
     items["github_webhook_secret"] = {
-        "description": "GitHub Webhook 密钥",
+        "description": "回调密钥",
         "type": "string",
-        "hint": "必须与 GitHub App 中配置的 Webhook Secret 完全一致。",
+        "hint": "必须与平台应用中配置的回调密钥完全一致。",
     }
     items["github_api_base_url"] = {
-        "description": "GitHub API 基础地址",
+        "description": "接口基础地址",
         "type": "string",
-        "hint": "默认值为 https://api.github.com。",
+        "hint": "留空时使用平台默认接口地址。",
     }
     items["github_events"] = {
-        "description": "GitHub 订阅事件",
+        "description": "订阅事件",
         "type": "list",
         "hint": "留空表示订阅全部已支持事件。",
         "options": SUPPORTED_GITHUB_EVENTS,
@@ -259,36 +259,36 @@ def _inject_platform_metadata() -> None:
     items["wake_event_types"] = {
         "description": "唤醒事件类型",
         "type": "list",
-        "hint": "仅这些事件类型会按事件触发 LLM 唤醒。",
+        "hint": "仅这些事件类型会按事件触发大模型唤醒。",
         "options": SUPPORTED_GITHUB_EVENTS,
     }
     items["wake_on_mentions"] = {
         "description": "@提及时唤醒",
         "type": "bool",
-        "hint": "当 GitHub 评论正文中提及机器人时触发唤醒。",
+        "hint": "当评论正文中提及机器人时触发唤醒。",
     }
     items["mention_target_logins"] = {
         "description": "提及目标登录名",
         "type": "list",
-        "hint": "仅当 @login 命中该列表时，按提及唤醒。",
+        "hint": "仅当 @账号名 命中该列表时，按提及唤醒。",
     }
     items["ignore_bot_sender_events"] = {
-        "description": "忽略 Bot 发送者事件",
+        "description": "忽略机器人发送者事件",
         "type": "bool",
-        "hint": "忽略 sender 为 GitHub Bot 用户的事件。",
+        "hint": "忽略发送者为平台机器人用户的事件。",
     }
     items["github_signature_validation"] = {
         "description": "启用签名校验",
         "type": "bool",
-        "hint": "对每次 webhook 请求校验 X-Hub-Signature-256。",
+        "hint": "对每次回调请求校验签名请求头。",
     }
     items["github_delivery_cache_ttl_seconds"] = {
-        "description": "Delivery 去重 TTL（秒）",
+        "description": "投递去重缓存时长（秒）",
         "type": "int",
         "hint": "防重放窗口时长（秒）。",
     }
     items["github_delivery_cache_max_entries"] = {
-        "description": "Delivery 去重最大条目数",
+        "description": "投递去重缓存最大条目数",
         "type": "int",
         "hint": "内存去重缓存上限。",
     }
@@ -297,13 +297,13 @@ def _inject_platform_metadata() -> None:
 
 
 @register(
-    "astrbot_plugin_githubapp-adopter",
+    "astrbot_plugin_githubapp-adapter",
     "OpenCode",
-    "为 AstrBot 提供 GitHub App Webhook 适配与临时令牌能力。",
+    "为 AstrBot 提供 GitHub App 回调适配与受控仓库操作能力。",
     "v0.2.0",
-    "https://github.com/example/astrbot_plugin_githubapp-adopter",
+    "https://github.com/example/astrbot_plugin_githubapp-adapter",
 )
-class GitHubAppAdopterPlugin(Star):
+class GitHubAppAdapterPlugin(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
         self.config = config
@@ -452,7 +452,7 @@ class GitHubAppAdopterPlugin(Star):
         pr_title: str = "",
         pr_body: str = "",
     ) -> str:
-        """受控工具：在仓库创建 LICENSE 并发起 PR，不向模型暴露 token。
+        """受控工具：在仓库创建 LICENSE 并发起合并请求，不向模型暴露令牌。
 
         Args:
             repo(string): 目标仓库，格式 owner/repo；为空时从当前 GitHub 会话自动解析。
@@ -460,8 +460,8 @@ class GitHubAppAdopterPlugin(Star):
             platform_id(string): 可选，当存在多个 github_app 平台时可指定。
             branch_name(string): 可选，目标分支名。
             license_type(string): 许可证类型，当前仅支持 MIT。
-            pr_title(string): 可选，PR 标题。
-            pr_body(string): 可选，PR 描述。
+            pr_title(string): 可选，合并请求标题。
+            pr_body(string): 可选，合并请求描述。
         """
         if event.get_platform_name() != GITHUB_ADAPTER_TYPE:
             return "该工具仅在 github_app 平台会话中可用。"
@@ -477,7 +477,7 @@ class GitHubAppAdopterPlugin(Star):
         if adapter is None:
             return "未找到可用的 github_app 平台适配器。"
         if not hasattr(adapter, "create_license_pr_for_skill"):
-            return "当前 github_app 适配器不支持受控 PR 工具，请升级插件。"
+            return "当前 github_app 适配器不支持受控合并请求工具，请升级插件。"
 
         repo_value = str(repo or "").strip()
         if not repo_value:
@@ -520,8 +520,8 @@ class GitHubAppAdopterPlugin(Star):
             detail = str(payload.get("error", "unknown error"))
             stage = str(payload.get("stage", "")).strip()
             if stage:
-                return f"创建 LICENSE PR 失败（{stage}）：{detail}"
-            return f"创建 LICENSE PR 失败：{detail}"
+                return f"创建 LICENSE 合并请求失败（{stage}）：{detail}"
+            return f"创建 LICENSE 合并请求失败：{detail}"
 
         pr_url = str(payload.get("pr_url", "")).strip()
         pr_number = int(payload.get("pr_number", 0) or 0)
@@ -531,7 +531,7 @@ class GitHubAppAdopterPlugin(Star):
         existing = bool(payload.get("existing_pr", False))
 
         lines = [
-            "LICENSE PR 已创建成功。",
+            "LICENSE 合并请求已创建成功。",
             f"repo: {target_repo}",
             f"base_branch: {base_branch}",
             f"head_branch: {head_branch}",
@@ -541,7 +541,7 @@ class GitHubAppAdopterPlugin(Star):
         if pr_url:
             lines.append(f"pr_url: {pr_url}")
         if existing:
-            lines.append("note: 已存在同分支 PR，本次返回已有 PR。")
+            lines.append("说明: 已存在同分支合并请求，本次返回已有结果。")
         return "\n".join(lines)
 
     @filter.llm_tool(name=GITHUB_REPO_LS_TOOL_NAME)
@@ -858,25 +858,25 @@ class GitHubAppAdopterPlugin(Star):
             )
 
         context_lines = [
-            "[GitHub Session Context]",
-            f"- repository: {repo_value or '(unknown)'}",
-            f"- session_id: {github_session_id or '(unknown)'}",
+            "[GitHub 会话上下文]",
+            f"- 仓库: {repo_value or '未知'}",
+            f"- 会话编号: {github_session_id or '未知'}",
         ]
         if thread_type:
-            context_lines.append(f"- thread_type: {thread_type}")
+            context_lines.append(f"- 线程类型: {thread_type}")
         if thread_number is not None:
-            context_lines.append(f"- thread_number: {thread_number}")
+            context_lines.append(f"- 线程编号: {thread_number}")
         if thread_title:
-            context_lines.append(f"- thread_title: {thread_title}")
+            context_lines.append(f"- 线程标题: {thread_title}")
         if thread_url:
-            context_lines.append(f"- thread_url: {thread_url}")
+            context_lines.append(f"- 线程链接: {thread_url}")
         if workspace_hint:
-            context_lines.append(f"- sandbox_workspace: {workspace_hint}")
+            context_lines.append(f"- 沙盒工作区: {workspace_hint}")
             context_lines.append(
-                "- note: shell tools will auto-cd to this workspace and auto-clone repo if missing."
+                "- 说明: shell 工具会先进入该工作区，缺少仓库时自动克隆。"
             )
         context_lines.append(
-            "- instruction: for repository file/code questions, use github_repo_ls first, then github_repo_read / github_repo_search."
+            "- 指令: 遇到仓库代码问题，先调用 github_repo_ls，再用 github_repo_read 或 github_repo_search。"
         )
         context_block = "\n".join(context_lines).strip()
         if context_block and context_block not in req.system_prompt:
@@ -927,3 +927,7 @@ class GitHubAppAdopterPlugin(Star):
         )
         if hint not in req.system_prompt:
             req.system_prompt = f"{req.system_prompt}\n{hint}".strip()
+
+
+# 兼容旧类名，避免外部导入或旧配置失效
+GitHubAppAdopterPlugin = GitHubAppAdapterPlugin
