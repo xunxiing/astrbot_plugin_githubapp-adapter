@@ -82,6 +82,18 @@
     "default": false,
     "hint": "启用后，可在不向大模型暴露令牌的前提下创建分支、提交并发起合并请求。"
   },
+  "enable_fake_token_bridge": {
+    "description": "启用假令牌替换桥接",
+    "type": "bool",
+    "default": true,
+    "hint": "向模型提供短期假令牌占位符，并在工具执行前替换为真实只读令牌。"
+  },
+  "fake_token_ttl_seconds": {
+    "description": "假令牌有效期（秒）",
+    "type": "int",
+    "default": 900,
+    "hint": "假令牌与替换映射的最大有效时长；到期后需重新申请。"
+  },
   "enable_auto_sandbox_workspace_prepare": {
     "description": "自动准备平台会话沙盒工作区",
     "type": "bool",

@@ -21,12 +21,15 @@
 - GitHub 会话可自动准备沙盒工作区，并在缺少仓库时自动克隆。
 - 远程写入（分支/提交/PR）仅通过受控工具执行。
 - GitHub 会话会向模型注入仓库、线程标题、线程编号和工作区路径上下文。
-- 插件不会向模型返回真实 GitHub 令牌。
+- 插件不会向模型返回真实 GitHub 令牌；仅可选下发短期假令牌占位符。
+- 工具执行前会将假令牌占位符替换为最小权限的真实只读令牌。
 - 可选的令牌字面量防护仅拦截明文 `ghs_...`。
 
 ## 关键配置
 
 - `enable_direct_repo_write_tool=true`：启用 `github_create_license_pr`。
+- `enable_fake_token_bridge=true`（默认）：启用假令牌占位与执行前替换。
+- `fake_token_ttl_seconds=900`（默认）：假令牌最大有效期。
 - `enable_auto_sandbox_workspace_prepare=true`（默认）：自动准备沙盒工作区。
 - `sandbox_workspace_root=/tmp/github-workspaces`：沙盒工作区根目录。
 - `sandbox_workspace_clone_depth=1`：自动克隆深度。

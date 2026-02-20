@@ -1,6 +1,9 @@
 ﻿from __future__ import annotations
 
+import asyncio
 import re
+import secrets
+import time
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -43,6 +46,7 @@ IMAGE_ATTACHMENT_PATH_HINT_RE = re.compile(
 )
 SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 GITHUB_TOKEN_LITERAL_RE = re.compile(r"\bghs_[A-Za-z0-9_]{20,}\b")
+GITHUB_FAKE_TOKEN_LITERAL_RE = re.compile(r"\bghu_fake_[A-Za-z0-9]{24,}\b")
 GITHUB_ONLY_LLM_TOOLS = {
     GITHUB_CREATE_LICENSE_PR_TOOL_NAME,
     GITHUB_REPO_LS_TOOL_NAME,
@@ -307,6 +311,9 @@ class GitHubAppAdapterPlugin(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
         self.config = config
+        self._fake_token_lock = asyncio.Lock()
+        self._session_fake_tokens: dict[str, dict[str, Any]] = {}
+        self._fake_token_to_session: dict[str, str] = {}
         skill_name = _ensure_github_skill(self.config)
         runtime_cfg = dict(self.config)
         runtime_cfg["effective_github_skill_name"] = skill_name
@@ -348,6 +355,150 @@ class GitHubAppAdapterPlugin(Star):
             repo_value = _extract_repo_from_github_session(event.get_session_id())
         return repo_value
 
+    def _resolve_github_session_id(self, event: AstrMessageEvent) -> str:
+        github_session_id = str(event.get_extra("github_session_id", "")).strip()
+        if not github_session_id and event.get_platform_name() == GITHUB_ADAPTER_TYPE:
+            github_session_id = event.get_session_id()
+        return github_session_id
+
+    def _resolve_installation_id_from_event(self, event: AstrMessageEvent) -> int | None:
+        raw = event.get_extra("github_installation_id", 0)
+        try:
+            resolved = int(raw or 0)
+        except Exception:
+            return None
+        return resolved if resolved > 0 else None
+
+    def _cleanup_fake_token_cache(self, now: float | None = None) -> None:
+        ts = time.time() if now is None else float(now)
+        expired_sessions: list[str] = []
+        for session_id, entry in self._session_fake_tokens.items():
+            expires_at = float(entry.get("expires_at_epoch", 0.0) or 0.0)
+            if expires_at <= ts:
+                expired_sessions.append(session_id)
+        for session_id in expired_sessions:
+            entry = self._session_fake_tokens.pop(session_id, {})
+            fake_token = str(entry.get("fake_token", "")).strip()
+            if fake_token and self._fake_token_to_session.get(fake_token) == session_id:
+                self._fake_token_to_session.pop(fake_token, None)
+
+    @staticmethod
+    def _build_fake_token_literal() -> str:
+        return f"ghu_fake_{secrets.token_hex(18)}"
+
+    async def _ensure_session_fake_token_bridge(
+        self,
+        event: AstrMessageEvent,
+        adapter: Any,
+        repo: str,
+        cfg: Mapping[str, Any],
+    ) -> tuple[str, int]:
+        if not bool(cfg.get("enable_fake_token_bridge", True)):
+            return "", 0
+        if not hasattr(adapter, "issue_readonly_token_for_skill"):
+            return "", 0
+
+        normalized_repo = normalize_repo_full_name(repo)
+        if not normalized_repo:
+            return "", 0
+        session_id = self._resolve_github_session_id(event)
+        if not session_id:
+            return "", 0
+
+        try:
+            fake_ttl_seconds = int(cfg.get("fake_token_ttl_seconds", 900))
+        except Exception:
+            fake_ttl_seconds = 900
+        fake_ttl_seconds = min(max(60, fake_ttl_seconds), 3600)
+        now = time.time()
+
+        async with self._fake_token_lock:
+            self._cleanup_fake_token_cache(now)
+            cached = self._session_fake_tokens.get(session_id)
+            if isinstance(cached, dict):
+                cached_repo = str(cached.get("repo", "")).strip()
+                cached_token = str(cached.get("fake_token", "")).strip()
+                cached_expire = float(cached.get("expires_at_epoch", 0.0) or 0.0)
+                if (
+                    cached_repo == normalized_repo
+                    and cached_token
+                    and cached_expire - 20 > now
+                ):
+                    return cached_token, int(max(1, cached_expire - now))
+
+        installation_id = self._resolve_installation_id_from_event(event)
+        ok, payload = await adapter.issue_readonly_token_for_skill(
+            repo=normalized_repo,
+            installation_id=installation_id,
+            max_ttl_seconds=fake_ttl_seconds,
+        )
+        if not ok:
+            logger.warning(
+                "[GitHubApp] issue readonly token for bridge failed: "
+                f"repo={normalized_repo}, detail={payload}"
+            )
+            return "", 0
+
+        real_token = str(payload.get("token", "")).strip()
+        if not real_token:
+            return "", 0
+        try:
+            real_expires = float(payload.get("expires_at_epoch", 0.0) or 0.0)
+        except Exception:
+            real_expires = 0.0
+        if real_expires <= now:
+            real_expires = now + fake_ttl_seconds
+        effective_expire = min(real_expires, now + fake_ttl_seconds)
+        fake_token = self._build_fake_token_literal()
+
+        async with self._fake_token_lock:
+            self._cleanup_fake_token_cache(now)
+            old_entry = self._session_fake_tokens.get(session_id, {})
+            old_fake = str(old_entry.get("fake_token", "")).strip()
+            if old_fake:
+                self._fake_token_to_session.pop(old_fake, None)
+            self._session_fake_tokens[session_id] = {
+                "repo": normalized_repo,
+                "installation_id": int(payload.get("installation_id", 0) or 0),
+                "fake_token": fake_token,
+                "real_token": real_token,
+                "expires_at_epoch": effective_expire,
+            }
+            self._fake_token_to_session[fake_token] = session_id
+        return fake_token, int(max(1, effective_expire - now))
+
+    async def _replace_fake_token_literal_for_tool(
+        self,
+        event: AstrMessageEvent,
+        text: str,
+    ) -> tuple[str, bool, str]:
+        if not text:
+            return text, False, ""
+        session_id = self._resolve_github_session_id(event)
+        if not session_id:
+            return text, False, ""
+        now = time.time()
+        async with self._fake_token_lock:
+            self._cleanup_fake_token_cache(now)
+            entry = self._session_fake_tokens.get(session_id)
+            if not isinstance(entry, dict):
+                if GITHUB_FAKE_TOKEN_LITERAL_RE.search(text):
+                    return text, False, "fake_token_missing"
+                return text, False, ""
+            fake_token = str(entry.get("fake_token", "")).strip()
+            real_token = str(entry.get("real_token", "")).strip()
+            expires_at = float(entry.get("expires_at_epoch", 0.0) or 0.0)
+
+        if fake_token and fake_token in text:
+            if expires_at <= now:
+                return text, False, "fake_token_expired"
+            if real_token:
+                return text.replace(fake_token, real_token), True, ""
+            return text, False, "fake_token_missing"
+        if GITHUB_FAKE_TOKEN_LITERAL_RE.search(text):
+            return text, False, "fake_token_missing"
+        return text, False, ""
+
     @filter.on_astrbot_loaded()
     async def on_astrbot_loaded(self):
         skill_name = _ensure_github_skill(self.config)
@@ -373,8 +524,11 @@ class GitHubAppAdapterPlugin(Star):
         if tool_name not in {"astrbot_execute_shell", "astrbot_execute_python"}:
             return
 
+        source_key = "command" if tool_name == "astrbot_execute_shell" else "code"
+        source_text = str(tool_args.get(source_key, ""))
+        runtime_text = source_text
+
         if tool_name == "astrbot_execute_shell":
-            raw_command = str(tool_args.get("command", ""))
             auto_prepare_workspace = bool(
                 cfg.get("enable_auto_sandbox_workspace_prepare", True)
             )
@@ -396,12 +550,10 @@ class GitHubAppAdapterPlugin(Star):
                         clone_depth = int(cfg.get("sandbox_workspace_clone_depth", 1))
                     except Exception:
                         clone_depth = 1
-                    github_session_id = str(event.get_extra("github_session_id", "")).strip()
-                    if not github_session_id and event.get_platform_name() == GITHUB_ADAPTER_TYPE:
-                        github_session_id = event.get_session_id()
+                    github_session_id = self._resolve_github_session_id(event)
                     session_key = sanitize_workspace_session_key(github_session_id)
-                    tool_args["command"] = build_shell_workspace_bootstrap_command(
-                        command=raw_command,
+                    runtime_text = build_shell_workspace_bootstrap_command(
+                        command=source_text,
                         repo=normalized_repo,
                         session_key=session_key,
                         workspace_root=workspace_root,
@@ -409,36 +561,58 @@ class GitHubAppAdapterPlugin(Star):
                     )
 
         enforce_guard = bool(cfg.get("enforce_tool_write_guard", False))
-        if not enforce_guard:
-            return
-
-        block_token_literal = bool(cfg.get("guard_block_token_literal", True))
-        if not block_token_literal:
-            return
+        block_token_literal = (
+            bool(cfg.get("guard_block_token_literal", True)) if enforce_guard else False
+        )
 
         reasons: list[str] = []
-        if tool_name == "astrbot_execute_shell":
-            command = str(tool_args.get("command", ""))
-            if _contains_github_token_literal(command):
-                reasons.append("token_literal_in_shell_command")
-            if reasons:
-                reason_text = ",".join(list(dict.fromkeys(reasons)))
-                message = f"BLOCKED by github_app guard: {reason_text}"
-                safe_message = message.replace('"', "'").replace("\n", " ")
-                tool_args["command"] = f'echo "{safe_message}"'
-        elif tool_name == "astrbot_execute_python":
-            code = str(tool_args.get("code", ""))
-            if _contains_github_token_literal(code):
-                reasons.append("token_literal_in_python_code")
-            if reasons:
-                reason_text = ",".join(list(dict.fromkeys(reasons)))
-                message = f"BLOCKED by github_app guard: {reason_text}"
-                tool_args["code"] = f"print({message!r})"
+        if enforce_guard and block_token_literal:
+            if tool_name == "astrbot_execute_shell":
+                if _contains_github_token_literal(source_text):
+                    reasons.append("token_literal_in_shell_command")
+            elif tool_name == "astrbot_execute_python":
+                if _contains_github_token_literal(source_text):
+                    reasons.append("token_literal_in_python_code")
 
         if reasons:
             logger.warning(
                 f"[GitHubApp] blocked risky tool call: tool={tool_name}, reasons={reasons}"
             )
+            reason_text = ",".join(list(dict.fromkeys(reasons)))
+            message = f"BLOCKED by github_app guard: {reason_text}"
+            if tool_name == "astrbot_execute_shell":
+                safe_message = message.replace('"', "'").replace("\n", " ")
+                tool_args["command"] = f'echo "{safe_message}"'
+            else:
+                tool_args["code"] = f"print({message!r})"
+            return
+
+        enable_fake_token_bridge = bool(cfg.get("enable_fake_token_bridge", True))
+        if enable_fake_token_bridge:
+            replaced_text, replaced, replace_reason = await self._replace_fake_token_literal_for_tool(
+                event,
+                runtime_text,
+            )
+            if replace_reason:
+                safe_reason = replace_reason.replace('"', "'")
+                message = f"BLOCKED by github_app guard: {safe_reason}"
+                if tool_name == "astrbot_execute_shell":
+                    tool_args["command"] = f'echo "{message}"'
+                else:
+                    tool_args["code"] = f"print({message!r})"
+                logger.warning(
+                    "[GitHubApp] blocked tool call because fake token cannot be resolved: "
+                    f"tool={tool_name}, reason={replace_reason}"
+                )
+                return
+            runtime_text = replaced_text
+            if replaced:
+                logger.info(
+                    "[GitHubApp] replaced fake token literal before tool execution: "
+                    f"tool={tool_name}"
+                )
+
+        tool_args[source_key] = runtime_text
 
     @filter.llm_tool(name=GITHUB_CREATE_LICENSE_PR_TOOL_NAME)
     async def github_create_license_pr(
@@ -856,6 +1030,18 @@ class GitHubAppAdapterPlugin(Star):
                 github_session_id=github_session_id,
                 workspace_root=workspace_root,
             )
+        fake_token_literal = ""
+        fake_token_ttl_left = 0
+        normalized_repo = normalize_repo_full_name(repo_value)
+        if bool(cfg.get("enable_fake_token_bridge", True)) and normalized_repo:
+            adapter = self._resolve_github_adapter(event)
+            if adapter is not None:
+                fake_token_literal, fake_token_ttl_left = await self._ensure_session_fake_token_bridge(
+                    event=event,
+                    adapter=adapter,
+                    repo=normalized_repo,
+                    cfg=cfg,
+                )
 
         context_lines = [
             "[GitHub 会话上下文]",
@@ -874,6 +1060,12 @@ class GitHubAppAdapterPlugin(Star):
             context_lines.append(f"- 沙盒工作区: {workspace_hint}")
             context_lines.append(
                 "- 说明: shell 工具会先进入该工作区，缺少仓库时自动克隆。"
+            )
+        if fake_token_literal:
+            context_lines.append(f"- 只读临时令牌占位符: {fake_token_literal}")
+            context_lines.append(f"- 占位符有效期（秒）: {fake_token_ttl_left}")
+            context_lines.append(
+                "- 说明: 工具执行前会自动替换为真实令牌；只用于当前仓库只读访问。"
             )
         context_lines.append(
             "- 指令: 遇到仓库代码问题，先调用 github_repo_ls，再用 github_repo_read 或 github_repo_search。"

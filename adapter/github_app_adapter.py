@@ -1432,6 +1432,78 @@ class GitHubAppAdapter(Platform):
             "SOFTWARE.\n"
         )
 
+    async def issue_readonly_token_for_skill(
+        self,
+        *,
+        repo: str,
+        installation_id: int | None = None,
+        max_ttl_seconds: int = 600,
+    ) -> tuple[bool, dict[str, Any]]:
+        self._refresh_runtime_config()
+        if not self.github_app_id:
+            return False, {"error": "github_app_id is empty"}
+        if not self.private_key_text:
+            return False, {"error": "private key is empty or invalid"}
+
+        normalized_repo = _normalize_repo_full_name(repo)
+        if not normalized_repo:
+            return False, {"error": "invalid repo, expected owner/repo"}
+
+        resolved_installation_id = installation_id
+        if resolved_installation_id is None:
+            resolved_installation_id = await self._resolve_installation_id(normalized_repo)
+        if resolved_installation_id is None:
+            return False, {"error": f"installation id not found for repo={normalized_repo}"}
+
+        _, repo_name = normalized_repo.split("/", 1)
+        permissions = {"contents": "read"}
+        token_data = await self._create_installation_access_token(
+            resolved_installation_id,
+            permissions=permissions,
+            repositories=[repo_name],
+            use_cache=False,
+        )
+        scoped_to_repo = True
+        access_token = str(token_data.get("token", ""))
+        if not access_token:
+            token_data = await self._create_installation_access_token(
+                resolved_installation_id,
+                permissions=permissions,
+                repositories=None,
+                use_cache=False,
+            )
+            scoped_to_repo = False
+            access_token = str(token_data.get("token", ""))
+        if not access_token:
+            detail = str(token_data.get("error", "failed to get installation token"))
+            return False, {"error": detail, "stage": "issue_token"}
+
+        now = time.time()
+        try:
+            ttl_limit = int(max_ttl_seconds or 600)
+        except Exception:
+            ttl_limit = 600
+        ttl_limit = min(max(60, ttl_limit), 3600)
+
+        expires_at_epoch_raw = token_data.get("expires_at_epoch", 0)
+        try:
+            expires_at_epoch = float(expires_at_epoch_raw or 0.0)
+        except Exception:
+            expires_at_epoch = 0.0
+        if expires_at_epoch <= now:
+            expires_at_epoch = now + ttl_limit
+        effective_expires_at_epoch = min(expires_at_epoch, now + ttl_limit)
+
+        return True, {
+            "repo": normalized_repo,
+            "installation_id": int(resolved_installation_id),
+            "permissions": permissions,
+            "scoped_to_repo": scoped_to_repo,
+            "token": access_token,
+            "expires_at_epoch": effective_expires_at_epoch,
+            "expires_in_seconds": int(max(1, effective_expires_at_epoch - now)),
+        }
+
     async def create_license_pr_for_skill(
         self,
         *,
