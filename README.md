@@ -139,7 +139,7 @@ pip install -r astrbot_plugin_githubapp-adapter/requirements.txt
 **插件配置（在插件设置中）**
 - `private_key_files`：上传私钥文件（`.pem`）
 - `default_github_events`：默认订阅事件
-- `default_wake_event_types`：默认唤醒事件类型
+- `default_wake_event_types`：默认唤醒事件类型 **（建议勾选几个）**
 - `default_wake_on_mentions`：默认提及唤醒
 - `default_mention_target_logins`：默认提及目标
 - `default_ignore_bot_sender_events`：默认忽略机器人事件

@@ -1,6 +1,6 @@
 name: astrbot_plugin_githubapp-adapter
 display_name: GitHub 应用适配器
 desc: 为 AstrBot 提供 GitHub App Webhook 适配与受控仓库操作能力。
-version: v0.2.0
-author: OpenCode
-repo: https://github.com/example/astrbot_plugin_githubapp-adapter
+version: v1.0.0
+author: Oxunxiinge
+repo: https://github.com/xunxiing/astrbot_plugin_githubapp-adapter
