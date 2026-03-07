@@ -123,6 +123,9 @@ pip install -r astrbot_plugin_githubapp-adapter/requirements.txt
 #### 3.1 基础配置
 在 AstrBot 管理界面中配置以下参数：
 
+**系统配置（在astrbot本体的系统配置中）**
+对外可达的回调接口地址=公网可直达地址
+
 **平台配置（在平台设置中）**
 - `github_app_id`：GitHub App 的 App ID
 - `github_webhook_secret`：Webhook secret（与 GitHub App 设置一致）
