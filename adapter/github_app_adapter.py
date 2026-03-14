@@ -23,6 +23,7 @@ from astrbot.api.platform import (
     PlatformMetadata,
     register_platform_adapter,
 )
+from astrbot.core import astrbot_config, file_token_service
 from astrbot.core.platform.astr_message_event import MessageSesion
 from astrbot.core.utils.webhook_utils import log_webhook_info
 
@@ -66,7 +67,10 @@ class GitHubSessionRoute:
     installation_id: int | None
 
 
-async def _make_message_chain_github_body(message_chain: MessageChain) -> str:
+async def _make_message_chain_github_body(
+    message_chain: MessageChain,
+    callback_api_base: str = "",
+) -> str:
     parts: list[str] = []
     for component in message_chain.chain:
         if isinstance(component, Plain):
@@ -82,7 +86,10 @@ async def _make_message_chain_github_body(message_chain: MessageChain) -> str:
             continue
 
         if isinstance(component, Image):
-            image_url = await _resolve_image_component_url(component)
+            image_url = await _resolve_image_component_url(
+                component,
+                callback_api_base=callback_api_base,
+            )
             if image_url:
                 parts.append(f"![image]({image_url})")
             else:
@@ -90,7 +97,10 @@ async def _make_message_chain_github_body(message_chain: MessageChain) -> str:
             continue
 
         if isinstance(component, File):
-            file_url = await _resolve_file_component_url(component)
+            file_url = await _resolve_file_component_url(
+                component,
+                callback_api_base=callback_api_base,
+            )
             if file_url:
                 file_name = component.name or "file"
                 parts.append(f"[{file_name}]({file_url})")
@@ -104,10 +114,49 @@ async def _make_message_chain_github_body(message_chain: MessageChain) -> str:
     return body
 
 
-async def _resolve_image_component_url(component: Image) -> str:
+def _normalize_callback_api_base(value: str) -> str:
+    text = str(value or "").strip()
+    if not text.startswith(("http://", "https://")):
+        return ""
+    for marker in ("/api/platform/webhook/", "/api/file/"):
+        if marker in text:
+            text = text.split(marker, 1)[0]
+            break
+    return text.rstrip("/")
+
+
+async def _register_path_to_file_service(file_path: str, callback_api_base: str) -> str:
+    normalized_base = _normalize_callback_api_base(callback_api_base)
+    if not normalized_base:
+        return ""
+    token = await file_token_service.register_file(file_path)
+    return f"{normalized_base}/api/file/{token}"
+
+
+async def _resolve_image_component_url(
+    component: Image,
+    callback_api_base: str = "",
+) -> str:
     url = (component.url or component.file or "").strip()
     if url.startswith(("http://", "https://")):
         return url
+    normalized_base = _normalize_callback_api_base(callback_api_base)
+    if not normalized_base:
+        normalized_base = _normalize_callback_api_base(
+            str(astrbot_config.get("callback_api_base", ""))
+        )
+    if normalized_base:
+        try:
+            file_path = await component.convert_to_file_path()
+            registered_url = await _register_path_to_file_service(
+                file_path,
+                normalized_base,
+            )
+            if registered_url:
+                return registered_url
+        except Exception as exc:
+            logger.warning(f"[GitHubApp] failed to publish image component: {exc}")
+            return ""
     try:
         registered_url = (await component.register_to_file_service()).strip()
         if registered_url.startswith(("http://", "https://")):
@@ -117,10 +166,33 @@ async def _resolve_image_component_url(component: Image) -> str:
     return ""
 
 
-async def _resolve_file_component_url(component: File) -> str:
+async def _resolve_file_component_url(
+    component: File,
+    callback_api_base: str = "",
+) -> str:
     url = (component.url or getattr(component, "file", "") or "").strip()
     if url.startswith(("http://", "https://")):
         return url
+    normalized_base = _normalize_callback_api_base(callback_api_base)
+    if not normalized_base:
+        normalized_base = _normalize_callback_api_base(
+            str(astrbot_config.get("callback_api_base", ""))
+        )
+    if normalized_base:
+        try:
+            file_path = await component.get_file()
+            registered_url = await _register_path_to_file_service(
+                file_path,
+                normalized_base,
+            )
+            if registered_url:
+                return registered_url
+        except Exception as exc:
+            logger.warning(
+                "[GitHubApp] failed to publish file component: "
+                f"name={component.name or 'unknown'}, err={exc}"
+            )
+            return ""
     try:
         registered_url = (await component.register_to_file_service()).strip()
         if registered_url.startswith(("http://", "https://")):
@@ -543,6 +615,7 @@ class GitHubAppAdapter(Platform):
         self._cached_app_slug = ""
         self._warned_no_mention_target = False
         self._http_timeout_seconds = 15
+        self._public_callback_api_base = ""
 
         self._refresh_runtime_config()
         logger.info(
@@ -554,12 +627,36 @@ class GitHubAppAdapter(Platform):
     def meta(self) -> PlatformMetadata:
         return self._metadata
 
+    def _get_effective_callback_api_base(self) -> str:
+        configured_base = _normalize_callback_api_base(
+            str(astrbot_config.get("callback_api_base", ""))
+        )
+        if configured_base:
+            return configured_base
+        return _normalize_callback_api_base(self._public_callback_api_base)
+
+    def _remember_public_callback_api_base(self, request_obj: Any) -> None:
+        candidates = [
+            getattr(request_obj, "url_root", ""),
+            getattr(request_obj, "host_url", ""),
+            getattr(request_obj, "base_url", ""),
+            getattr(request_obj, "url", ""),
+        ]
+        for candidate in candidates:
+            normalized_base = _normalize_callback_api_base(str(candidate))
+            if normalized_base:
+                self._public_callback_api_base = normalized_base
+                return
+
     async def send_by_session(
         self,
         session: MessageSesion,
         message_chain: MessageChain,
     ):
-        body = await _make_message_chain_github_body(message_chain)
+        body = await _make_message_chain_github_body(
+            message_chain,
+            callback_api_base=self._get_effective_callback_api_base(),
+        )
         if body:
             success, reason = await self._send_text_to_github(
                 session.session_id,
@@ -612,6 +709,7 @@ class GitHubAppAdapter(Platform):
                 self.github_webhook_secret, raw_body, signature
             ):
                 return {"error": "invalid signature"}, 401
+        self._remember_public_callback_api_base(request)
 
         dedup_key = (
             f"{event_name}:{delivery_id}"
