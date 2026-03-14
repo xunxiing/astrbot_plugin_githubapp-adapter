@@ -11,7 +11,10 @@ from cryptography.hazmat.primitives import serialization
 
 from astrbot.api import logger
 from astrbot.api.star import StarTools
-from astrbot.core.utils.astrbot_path import get_astrbot_config_path
+from astrbot.core.utils.astrbot_path import (
+    get_astrbot_config_path,
+    get_astrbot_data_path,
+)
 
 
 def _ensure_list(value: Any) -> list[str]:
@@ -106,7 +109,7 @@ class PluginConfigStore:
         legacy_root_dirs: list[str] | None = None,
     ) -> None:
         root_dirs = [plugin_root_dir]
-        for legacy in (legacy_root_dirs or []):
+        for legacy in legacy_root_dirs or []:
             legacy_name = str(legacy).strip()
             if legacy_name and legacy_name not in root_dirs:
                 root_dirs.append(legacy_name)
@@ -176,18 +179,45 @@ class PluginConfigStore:
 
 
 class ConfigManager:
-    def __init__(self, plugin_config_store: PluginConfigStore) -> None:
+    def __init__(
+        self,
+        plugin_config_store: PluginConfigStore,
+        plugin_root_dir: str,
+        legacy_root_dirs: list[str] | None = None,
+    ) -> None:
         self._plugin_config_store = plugin_config_store
+        self._plugin_root_dir = str(plugin_root_dir).strip()
+        self._legacy_root_dirs = [
+            str(root_dir).strip()
+            for root_dir in (legacy_root_dirs or [])
+            if str(root_dir).strip()
+        ]
 
-    @staticmethod
-    def get_plugin_data_dir() -> Path:
-        data_dir = StarTools.get_data_dir()
+    def _build_plugin_data_roots(self) -> list[Path]:
+        base_dir = Path(get_astrbot_data_path()) / "plugin_data"
+        root_dirs = [self._plugin_root_dir, *self._legacy_root_dirs]
+        return list(
+            dict.fromkeys(
+                (base_dir / root_dir).resolve(strict=False)
+                for root_dir in root_dirs
+                if root_dir
+            )
+        )
+
+    def get_plugin_data_dir(self) -> Path:
+        data_dir = StarTools.get_data_dir(plugin_name=self._plugin_root_dir)
         if isinstance(data_dir, Path):
             return data_dir.resolve(strict=False)
         return Path(str(data_dir)).resolve(strict=False)
 
     def _collect_plugin_data_roots(self) -> list[Path]:
-        return [self.get_plugin_data_dir()]
+        current_root = self.get_plugin_data_dir()
+        existing_legacy_roots = [
+            root_dir
+            for root_dir in self._build_plugin_data_roots()
+            if root_dir != current_root and root_dir.exists() and root_dir.is_dir()
+        ]
+        return [current_root, *existing_legacy_roots]
 
     def _auto_discover_private_key_paths(self) -> list[str]:
         discovered: list[str] = []
@@ -262,7 +292,9 @@ class ConfigManager:
             wake_on_mentions = plugin_cfg.get("default_wake_on_mentions", True)
         wake_on_mentions_bool = bool(wake_on_mentions)
 
-        mention_target_logins = _ensure_list(platform_config.get("mention_target_logins"))
+        mention_target_logins = _ensure_list(
+            platform_config.get("mention_target_logins")
+        )
         if not mention_target_logins:
             mention_target_logins = _ensure_list(
                 plugin_cfg.get("default_mention_target_logins")
@@ -290,7 +322,9 @@ class ConfigManager:
         except Exception:
             ttl_seconds = 900
         try:
-            max_entries = int(max_entries_raw) if str(max_entries_raw).strip() else 10000
+            max_entries = (
+                int(max_entries_raw) if str(max_entries_raw).strip() else 10000
+            )
         except Exception:
             max_entries = 10000
 
@@ -298,8 +332,12 @@ class ConfigManager:
         runtime_private_key_files = _ensure_list(
             runtime_plugin_cfg.get("private_key_files")
         )
-        configured_private_key_files = runtime_private_key_files or file_private_key_files
-        platform_private_key_files = _ensure_list(platform_config.get("private_key_files"))
+        configured_private_key_files = (
+            runtime_private_key_files or file_private_key_files
+        )
+        platform_private_key_files = _ensure_list(
+            platform_config.get("private_key_files")
+        )
         effective_private_key_files = (
             configured_private_key_files or platform_private_key_files
         )

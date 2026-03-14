@@ -27,9 +27,9 @@ from astrbot.core.platform.astr_message_event import MessageSesion
 from astrbot.core.utils.webhook_utils import log_webhook_info
 
 from .config_manager import ConfigManager, PluginConfigStore
+from .github_api_client import GitHubApiClient
 from .github_event import SUPPORTED_EVENTS, GitHubParsedEvent, parse_github_event
 from .github_event_message import GitHubAppMessageEvent
-from .github_api_client import GitHubApiClient
 from .security import (
     DeliveryDeduplicator,
     fallback_delivery_id,
@@ -165,11 +165,8 @@ def _extract_image_urls_from_text(text: str) -> list[str]:
         if not href.startswith(("http://", "https://")):
             continue
         href_lower = href.lower()
-        if (
-            "/user-attachments/assets/" in href_lower
-            or href_lower.endswith(
-                (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg")
-            )
+        if "/user-attachments/assets/" in href_lower or href_lower.endswith(
+            (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg")
         ):
             urls.append(href)
     return list(dict.fromkeys(u for u in urls if u.startswith(("http://", "https://"))))
@@ -195,10 +192,15 @@ def _build_repo_image_cdn_candidates(image_url: str) -> list[str]:
     if host == "raw.githubusercontent.com" and len(segments) >= 4:
         owner, repo, ref = segments[0], segments[1], segments[2]
         file_path = "/".join(segments[3:])
-    elif host == "github.com" and len(segments) >= 5 and segments[2] in {
-        "blob",
-        "raw",
-    }:
+    elif (
+        host == "github.com"
+        and len(segments) >= 5
+        and segments[2]
+        in {
+            "blob",
+            "raw",
+        }
+    ):
         owner, repo, mode = segments[0], segments[1], segments[2]
         ref = segments[3]
         file_path = "/".join(segments[4:])
@@ -354,8 +356,8 @@ def _replace_event_message_text(
     image_fallback_urls: list[str] | None = None,
 ) -> None:
     value = (text or "").strip()
-    local_paths = list(dict.fromkeys((image_local_paths or [])))
-    fallback_urls = list(dict.fromkeys((image_fallback_urls or [])))
+    local_paths = list(dict.fromkeys(image_local_paths or []))
+    fallback_urls = list(dict.fromkeys(image_fallback_urls or []))
     components: list[Any] = []
     if not value and local_paths:
         value = "[包含图片附件]"
@@ -503,7 +505,11 @@ class GitHubAppAdapter(Platform):
             PLUGIN_ROOT_DIR,
             legacy_root_dirs=LEGACY_PLUGIN_ROOT_DIRS,
         )
-        self._config_manager = ConfigManager(self._plugin_config_store)
+        self._config_manager = ConfigManager(
+            self._plugin_config_store,
+            plugin_root_dir=PLUGIN_ROOT_DIR,
+            legacy_root_dirs=LEGACY_PLUGIN_ROOT_DIRS,
+        )
         self._api_client = GitHubApiClient(timeout_seconds=15)
         self._delivery_cache = DeliveryDeduplicator()
 
@@ -645,8 +651,10 @@ class GitHubAppAdapter(Platform):
         image_urls = _extract_event_image_urls(parsed.event_name, payload)
         prefetch_access_token = ""
         if image_urls and parsed.installation_id is not None:
-            prefetch_access_token = await self._api_client.get_installation_access_token(
-                parsed.installation_id
+            prefetch_access_token = (
+                await self._api_client.get_installation_access_token(
+                    parsed.installation_id
+                )
             )
         (
             image_local_paths,
@@ -672,7 +680,10 @@ class GitHubAppAdapter(Platform):
                 u for u in rendered_image_urls if u and u not in set(image_urls)
             ]
             if retry_urls:
-                api_ok_paths, api_failed_urls = await self._materialize_inbound_image_urls(
+                (
+                    api_ok_paths,
+                    api_failed_urls,
+                ) = await self._materialize_inbound_image_urls(
                     retry_urls,
                     prefetch_access_token,
                 )
@@ -723,7 +734,9 @@ class GitHubAppAdapter(Platform):
         if not image_urls:
             return [], []
 
-        target_root = self._config_manager.get_plugin_data_dir() / "runtime" / "inbound_images"
+        target_root = (
+            self._config_manager.get_plugin_data_dir() / "runtime" / "inbound_images"
+        )
         try:
             target_root.mkdir(parents=True, exist_ok=True)
         except Exception as exc:
@@ -877,8 +890,8 @@ class GitHubAppAdapter(Platform):
 
         host = (parsed_url.netloc or "").lower()
         path = parsed_url.path or ""
-        is_user_attachments = (
-            host == "github.com" and path.startswith("/user-attachments/assets/")
+        is_user_attachments = host == "github.com" and path.startswith(
+            "/user-attachments/assets/"
         )
         header_profiles: list[tuple[str, dict[str, str]]] = [
             ("urllib_default", {}),
@@ -925,7 +938,9 @@ class GitHubAppAdapter(Platform):
                             suffix = ".bmp"
                         elif "image/svg" in content_type:
                             suffix = ".svg"
-                        elif "image/jpeg" in content_type or "image/jpg" in content_type:
+                        elif (
+                            "image/jpeg" in content_type or "image/jpg" in content_type
+                        ):
                             suffix = ".jpg"
                         else:
                             suffix = ".jpg"
@@ -948,9 +963,7 @@ class GitHubAppAdapter(Platform):
                                     target_path.unlink(missing_ok=True)
                                 except Exception:
                                     pass
-                                attempt_errors.append(
-                                    f"{profile_name}:image_too_large"
-                                )
+                                attempt_errors.append(f"{profile_name}:image_too_large")
                                 too_large = True
                                 break
                             wf.write(chunk)
@@ -1120,7 +1133,9 @@ class GitHubAppAdapter(Platform):
                 normalized_repo
             )
         if resolved_installation_id is None:
-            return False, {"error": f"installation id not found for repo={normalized_repo}"}
+            return False, {
+                "error": f"installation id not found for repo={normalized_repo}"
+            }
 
         _, repo_name = normalized_repo.split("/", 1)
         permissions = {"contents": "read"}
@@ -1195,9 +1210,13 @@ class GitHubAppAdapter(Platform):
         if raw_path and not normalized_path and raw_path not in {".", "/"}:
             return False, {"error": "invalid path", "stage": "validate_path"}
 
-        installation_id = await self._api_client.resolve_installation_id(normalized_repo)
+        installation_id = await self._api_client.resolve_installation_id(
+            normalized_repo
+        )
         if installation_id is None:
-            return False, {"error": f"installation id not found for repo={normalized_repo}"}
+            return False, {
+                "error": f"installation id not found for repo={normalized_repo}"
+            }
 
         token_data = await self._api_client.create_installation_access_token(
             installation_id,
@@ -1215,11 +1234,11 @@ class GitHubAppAdapter(Platform):
         ref_value = str(ref or "").strip()
         ref_query = f"?ref={parse.quote(ref_value, safe='')}" if ref_value else ""
         if encoded_path:
-            contents_url = (
-                f"{self.github_api_base_url}/repos/{repo_path}/contents/{encoded_path}{ref_query}"
-            )
+            contents_url = f"{self.github_api_base_url}/repos/{repo_path}/contents/{encoded_path}{ref_query}"
         else:
-            contents_url = f"{self.github_api_base_url}/repos/{repo_path}/contents{ref_query}"
+            contents_url = (
+                f"{self.github_api_base_url}/repos/{repo_path}/contents{ref_query}"
+            )
 
         headers = {
             "Accept": "application/vnd.github+json",
@@ -1240,10 +1259,19 @@ class GitHubAppAdapter(Platform):
         if isinstance(data, Mapping):
             node_type = str(data.get("type", "")).strip().lower()
             if node_type == "file":
-                return False, {"error": "target path is a file, not a directory", "stage": "list_repo_dir"}
-            return False, {"error": f"unsupported node type: {node_type or 'unknown'}", "stage": "list_repo_dir"}
+                return False, {
+                    "error": "target path is a file, not a directory",
+                    "stage": "list_repo_dir",
+                }
+            return False, {
+                "error": f"unsupported node type: {node_type or 'unknown'}",
+                "stage": "list_repo_dir",
+            }
         if not isinstance(data, list):
-            return False, {"error": "unexpected response type for directory", "stage": "list_repo_dir"}
+            return False, {
+                "error": "unexpected response type for directory",
+                "stage": "list_repo_dir",
+            }
 
         entries: list[dict[str, Any]] = []
         for item in data:
@@ -1318,9 +1346,13 @@ class GitHubAppAdapter(Platform):
         if not normalized_path:
             return False, {"error": "invalid file path", "stage": "validate_path"}
 
-        installation_id = await self._api_client.resolve_installation_id(normalized_repo)
+        installation_id = await self._api_client.resolve_installation_id(
+            normalized_repo
+        )
         if installation_id is None:
-            return False, {"error": f"installation id not found for repo={normalized_repo}"}
+            return False, {
+                "error": f"installation id not found for repo={normalized_repo}"
+            }
 
         token_data = await self._api_client.create_installation_access_token(
             installation_id,
@@ -1355,11 +1387,17 @@ class GitHubAppAdapter(Platform):
                 "stage": "read_repo_file",
             }
         if not isinstance(data, Mapping):
-            return False, {"error": "unexpected response type for file", "stage": "read_repo_file"}
+            return False, {
+                "error": "unexpected response type for file",
+                "stage": "read_repo_file",
+            }
 
         node_type = str(data.get("type", "")).strip().lower()
         if node_type != "file":
-            return False, {"error": "target path is not a file", "stage": "read_repo_file"}
+            return False, {
+                "error": "target path is not a file",
+                "stage": "read_repo_file",
+            }
 
         encoding = str(data.get("encoding", "")).strip().lower()
         raw_content = data.get("content", "")
@@ -1371,7 +1409,10 @@ class GitHubAppAdapter(Platform):
                     "utf-8", errors="replace"
                 )
             except Exception:
-                return False, {"error": "failed to decode base64 content", "stage": "decode_content"}
+                return False, {
+                    "error": "failed to decode base64 content",
+                    "stage": "decode_content",
+                }
         else:
             full_content = raw_content
 
@@ -1437,9 +1478,13 @@ class GitHubAppAdapter(Platform):
         if raw_path and not normalized_path and raw_path not in {".", "/"}:
             return False, {"error": "invalid path filter", "stage": "validate_path"}
 
-        installation_id = await self._api_client.resolve_installation_id(normalized_repo)
+        installation_id = await self._api_client.resolve_installation_id(
+            normalized_repo
+        )
         if installation_id is None:
-            return False, {"error": f"installation id not found for repo={normalized_repo}"}
+            return False, {
+                "error": f"installation id not found for repo={normalized_repo}"
+            }
 
         token_data = await self._api_client.create_installation_access_token(
             installation_id,
@@ -1531,7 +1576,10 @@ class GitHubAppAdapter(Platform):
         route = self._session_routes.get(session_id) or _parse_session_route(session_id)
         if not route:
             return False, "unsupported session id"
-        if route.thread_type not in SENDABLE_THREAD_TYPES or route.thread_number is None:
+        if (
+            route.thread_type not in SENDABLE_THREAD_TYPES
+            or route.thread_number is None
+        ):
             return False, f"thread type not sendable: {route.thread_type}"
         if not self.github_app_id:
             return False, "github_app_id is empty"
