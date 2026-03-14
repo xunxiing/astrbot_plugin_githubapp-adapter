@@ -108,6 +108,12 @@ async def _resolve_image_component_url(component: Image) -> str:
     url = (component.url or component.file or "").strip()
     if url.startswith(("http://", "https://")):
         return url
+    try:
+        registered_url = (await component.register_to_file_service()).strip()
+        if registered_url.startswith(("http://", "https://")):
+            return registered_url
+    except Exception as exc:
+        logger.warning(f"[GitHubApp] failed to publish image component: {exc}")
     return ""
 
 
@@ -115,6 +121,15 @@ async def _resolve_file_component_url(component: File) -> str:
     url = (component.url or getattr(component, "file", "") or "").strip()
     if url.startswith(("http://", "https://")):
         return url
+    try:
+        registered_url = (await component.register_to_file_service()).strip()
+        if registered_url.startswith(("http://", "https://")):
+            return registered_url
+    except Exception as exc:
+        logger.warning(
+            "[GitHubApp] failed to publish file component: "
+            f"name={component.name or 'unknown'}, err={exc}"
+        )
     return ""
 
 
