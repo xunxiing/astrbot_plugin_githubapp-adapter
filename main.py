@@ -283,11 +283,11 @@ def _inject_platform_metadata() -> None:
 
 
 @register(
-    "astrbot_plugin_githubapp-adapter",
+    "astrbot_plugin_githubapp_adapter",
     "OpenCode",
     "为 AstrBot 提供 GitHub App 回调适配与受控仓库操作能力。",
     "v0.2.0",
-    "https://github.com/example/astrbot_plugin_githubapp-adapter",
+    "https://github.com/xunxiing/astrbot_plugin_githubapp-adapter",
 )
 class GitHubAppAdapterPlugin(Star):
     def __init__(self, context: Context, config: dict):

@@ -36,8 +36,11 @@ from .security import (
     verify_github_signature,
 )
 
-PLUGIN_ROOT_DIR = "astrbot_plugin_githubapp-adapter"
-LEGACY_PLUGIN_ROOT_DIR = "astrbot_plugin_githubapp-adopter"
+PLUGIN_ROOT_DIR = "astrbot_plugin_githubapp_adapter"
+LEGACY_PLUGIN_ROOT_DIRS = [
+    "astrbot_plugin_githubapp-adopter",
+    "astrbot_plugin_githubapp-adapter",
+]
 ADAPTER_BUILD_MARK = "2026-02-18.01"
 MENTION_PATTERN = re.compile(r"(?<![A-Za-z0-9_])@[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})")
 HTML_IMAGE_SRC_PATTERN = re.compile(
@@ -498,7 +501,7 @@ class GitHubAppAdapter(Platform):
 
         self._plugin_config_store = PluginConfigStore(
             PLUGIN_ROOT_DIR,
-            legacy_root_dirs=[LEGACY_PLUGIN_ROOT_DIR],
+            legacy_root_dirs=LEGACY_PLUGIN_ROOT_DIRS,
         )
         self._config_manager = ConfigManager(self._plugin_config_store)
         self._api_client = GitHubApiClient(timeout_seconds=15)
