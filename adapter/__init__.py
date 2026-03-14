@@ -14,6 +14,8 @@ from .github_app_adapter import GitHubAppAdapter
 _ALIAS_PACKAGE_NAMES = (
     "data.plugins.astrbot_plugin_githubapp_adapter",
     "data.plugins.astrbot_plugin_githubapp-adapter",
+    "data.plugins.astrbot_plugin_githubapp_adopter",
+    "data.plugins.astrbot_plugin_githubapp-adopter",
 )
 
 for _alias in _ALIAS_PACKAGE_NAMES:
